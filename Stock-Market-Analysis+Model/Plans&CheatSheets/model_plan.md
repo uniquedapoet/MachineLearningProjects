@@ -87,3 +87,7 @@ Creating a machine learning model for stock market forecasting, specifically for
 5. Add new data features like macro indicators, options data, or sentiment scores for better accuracy. 
 
 This approach will provide a robust starting point for using historical stock data to forecast market movements and make decisions about buying, selling, or holding options.
+
+# NEXT PROJECTS
+### SHOW MORE INTEREST IN FINANCE MAYBE DOING PROJECTS WITH NO CODING AT ALL 
+### 
