@@ -57,7 +57,7 @@ def predict_action(data, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, stock_name):
+def stock_market_simulation(model, initial_cash, days, stock, stock_name,day=None):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
@@ -66,28 +66,33 @@ def stock_market_simulation(model, initial_cash, days, stock, stock_name):
     scaled = scale_data(stock)
     modelDecisionDf = pd.DataFrame(
         columns=['Stock Name', 'Day', 'Action', 'Cash', 'Shares Held', 'Portfolio Value','Stock Price'])
-
+    
     days = min(days, len(stock))
+
     for i in range(days):
         stock_price = stock['Close'].iloc[i]
         strategy = predict_action(scaled.iloc[i].to_dict(), model)
+        if day:
+            day = day
+        else:
+            day = i
         if strategy == 'Buy' and cash >= stock_price:
             # Buy one share if cash is sufficient
             cash -= stock_price
             shares_held += 1
-            print(f"Day {i}: Bought 1 share at {stock_price}, Cash left: {cash}")
+            print(f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Buy' and cash < stock_price:
             shares_held += cash / stock_price
             cash = 0
             print(
-                f"Day {i}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
+                f"Day {day}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Sell' and shares_held > 0:
             # Sell one share if we hold any
             cash += stock_price
             shares_held -= 1
-            print(f"Day {i}: Sold 1 share at {stock_price}, Cash: {cash}")
+            print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
 
         elif cash == 0:
             injection = input(
@@ -102,10 +107,10 @@ def stock_market_simulation(model, initial_cash, days, stock, stock_name):
         # Calculate the total portfolio value (cash + stock holdings)
         portfolio_value_at_time = cash + (shares_held * stock_price)
         portfolio_value.append(portfolio_value_at_time)
-
+        stock_name = stock['Symbol'].iloc[0]
         new_row = pd.DataFrame({
             'Stock Name': [stock_name],
-            'Day': [i],
+            'Day': [day],
             'Date': [stock['Date'].iloc[i]],
             'Action': [strategy],
             'Stock Price': [stock_price],
@@ -341,6 +346,27 @@ def add_columns(stock_df):
     stock_df['Volume_MA_10'] = stock_df['Volume'].rolling(window=10).mean()
     stock_df['Volume_MA_20'] = stock_df['Volume'].rolling(window=20).mean()
     stock_df['Volume_MA_50'] = stock_df['Volume'].rolling(window=50).mean()
+    # Use a smoothed version of 'Close' to detect peaks and troughs
+    stock_df['Smoothed_Close'] = stock_df['Close'].rolling(window=20).mean()
+
+    # Find local minima (buy points) and local maxima (sell points)
+    # Local minima (buy points)
+    stock_df['Buy_Signal'] = (stock_df['Smoothed_Close'].shift(1) > stock_df['Smoothed_Close']) & (stock_df['Smoothed_Close'].shift(-1) > stock_df['Smoothed_Close'])
+
+    # Local maxima (sell points)
+    stock_df['Sell_Signal'] = (stock_df['Smoothed_Close'].shift(1) < stock_df['Smoothed_Close']) & (stock_df['Smoothed_Close'].shift(-1) < stock_df['Smoothed_Close'])
+
+    # Initialize 'Optimal_Action' column with 'Hold'
+    stock_df['Optimal_Action'] = 'Hold'
+
+    # Assign 'Buy' where Buy_Signal is True
+    stock_df.loc[stock_df['Buy_Signal'], 'Optimal_Action'] = 'Buy'
+
+    # Assign 'Sell' where Sell_Signal is True
+    stock_df.loc[stock_df['Sell_Signal'], 'Optimal_Action'] = 'Sell'
+
+    # Clean up: drop the temporary signals if needed
+    stock_df.drop(['Buy_Signal', 'Sell_Signal', 'Smoothed_Close'], axis=1, inplace=True)
 
     stock_df['OBV'] = 0
     for i in range(1, len(stock_df)):
@@ -522,7 +548,7 @@ def train_model_incrementally():
     print("Model trained on all stocks and saved.")
 
 
-def simulate_day_specific(stock_df):
+def simulate_day(stock_df):
     # # Load the general model
     general_model = xgb.Booster()
     general_model.load_model('models/all_stocks_incremental_model.pkl') 
@@ -571,8 +597,6 @@ def simulate_day_specific(stock_df):
             specific_model = general_model
             print(f"Using general model for {symbol}")
 
-        if type(specific_model) == None or type(general_model) == None:
-            break
 
         # Simulate a day of trading for the stock with the specific model
         new_decisions_s, _ = stock_market_simulation(
@@ -620,20 +644,25 @@ def simulate_day_general(stock_df):
         if symbol in general_decision_df['Stock Name'].unique():
             last_row_g = general_decision_df[general_decision_df['Stock Name'] == symbol].iloc[-1]
         else:
-            last_row_g = {'Cash': 10000, 'Shares Held': 0}  # Initialize if no previous data
+            last_row_g = {'Cash': 10000, 'Shares Held': 0, 'Day': 0}  # Initialize if no previous data
 
         cash_g = last_row_g['Cash']
+        day = last_row_g['Day'] + 1
+
 
         # Get the stock data for the symbol
         updated_stock_df = get_stock_data(symbol)
         updated_stock_df = updated_stock_df.tail(1)
+
+        print(f"Using general model for {symbol}")
 
         new_decisions_g, _ = stock_market_simulation(
             model=general_model,
             initial_cash=cash_g,
             days=1,  # Simulate only one day
             stock=updated_stock_df,
-            stock_name=symbol
+            stock_name=symbol,
+            day = day
         )
 
         all_decisions_g = pd.concat([all_decisions_g, new_decisions_g], ignore_index=True)
@@ -659,19 +688,25 @@ def simulate_day_specific(stock_df):
         if symbol in specific_decision_df['Stock Name'].unique():
             last_row_s = specific_decision_df[specific_decision_df['Stock Name'] == symbol].iloc[-1]
         else:
-            last_row_s = {'Cash': 10000, 'Shares Held': 0}  # Initialize if no previous data
+            last_row_s = {'Cash': 10000, 'Shares Held': 0, 'Day': 0}  # Initialize if no previous data
 
         # Set the starting cash and shares for the current simulation
         cash_s = last_row_s['Cash']
+        day = last_row_s['Day'] + 1
 
         # Get the stock data for the symbol
         updated_stock_df = get_stock_data(symbol)
         updated_stock_df = updated_stock_df.tail(1)
 
         # Load the specific model for the stock, or fallback to the general model if it doesn't exist
-       
-        specific_model = joblib.load(f'models/{symbol}_model.pkl')
-        print(f"Using model for {symbol}")
+        try:
+            specific_model = joblib.load(f'models/{symbol}_model.pkl')
+            print(f"Using model for {symbol}")
+        except:
+            general_model = xgb.Booster()
+            general_model.load_model('models/all_stocks_incremental_model.pkl') 
+            specific_model = general_model
+            print(f"Using general model for {symbol}")
         
         # Simulate a day of trading for the stock with the specific model
         new_decisions_s, _ = stock_market_simulation(
@@ -679,10 +714,9 @@ def simulate_day_specific(stock_df):
             initial_cash=cash_s,
             days=1,  # Simulate only one day
             stock=updated_stock_df,
-            stock_name=symbol
+            stock_name=symbol,
+            day=day
         )
-        print('Specific Model has been simulated. Now simulating General Model...')
-
         # Append the new decisions to the all_decisions dataframes
         all_decisions_s = pd.concat([all_decisions_s, new_decisions_s], ignore_index=True)
 
@@ -690,29 +724,30 @@ def simulate_day_specific(stock_df):
     all_decisions_s.to_csv('data/specific_model_decisions.csv', mode='a', header=False, index=False)
 
 if __name__ == '__main__':
-    # script_dir = os.path.dirname(os.path.abspath(__file__))
-    # os.chdir(script_dir)
-    # # Load your stock data (SP500 example)
-    # stock_df = pd.read_csv('data/sp500_stocks.csv')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(script_dir)
+    # Load your stock data (SP500 example)
+    stock_df = pd.read_csv('data/sp500_stocks.csv')
 
-    # # Simulate one day for all stocks, continuing from previous cash balances
+    # Simulate one day for all stocks, continuing from previous cash balances
     # simulate_day_general(stock_df)
+    simulate_day_specific(stock_df)
 
-    # Load the general decisions DataFrame
-    general_decisions = pd.read_csv('data/general_model_decisions.csv')
-    specific_decisions = pd.read_csv('data/specific_model_decisions.csv')
-    print('Model rows loaded. Now updating rows...')
-    # Iterate over the rows and update the 'Stock Price' column
-    for index, row in general_decisions.iterrows():
-        stock = row['Stock Name']
-        stock_price = get_stock_data(stock)
-        general_decisions.at[index, 'Stock Price'] = stock_price['Close'].iloc[row['Day']]
-    print('General Model rows updated. Now updating Specific Model rows...')
-    for index, row in specific_decisions.iterrows():
-        stock = row['Stock Name']
-        stock_price = get_stock_data(stock)
-        specific_decisions.at[index, 'Stock Price'] = stock_price['Close'].iloc[row['Day']]
+    # # Load the general decisions DataFrame
+    # general_decisions = pd.read_csv('data/general_model_decisions.csv')
+    # specific_decisions = pd.read_csv('data/specific_model_decisions.csv')
+    # print('Model rows loaded. Now updating rows...')
+    # # Iterate over the rows and update the 'Stock Price' column
+    # for index, row in general_decisions.iterrows():
+    #     stock = row['Stock Name']
+    #     stock_price = get_stock_data(stock)
+    #     general_decisions.at[index, 'Stock Price'] = stock_price['Close'].iloc[row['Day']]
+    # print('General Model rows updated. Now updating Specific Model rows...')
+    # for index, row in specific_decisions.iterrows():
+    #     stock = row['Stock Name']
+    #     stock_price = get_stock_data(stock)
+    #     specific_decisions.at[index, 'Stock Price'] = stock_price['Close'].iloc[row['Day']]
 
-    # Save the updated DataFrame back to the CSV file
-    general_decisions.to_csv('data/general_model_decisions.csv', index=False)
-    specific_decisions.to_csv('data/specific_model_decisions.csv', index=False)
+    # # Save the updated DataFrame back to the CSV file
+    # general_decisions.to_csv('data/general_model_decisions.csv', index=False)
+    # specific_decisions.to_csv('data/specific_model_decisions.csv', index=False)
