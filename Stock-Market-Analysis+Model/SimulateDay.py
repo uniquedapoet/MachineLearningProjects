@@ -57,11 +57,11 @@ def predict_action(data, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, stock_name,day=None):
+def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, day=None):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
-    shares_held = 0
+    shares_held = existing_shares
     portfolio_value = []
     scaled = scale_data(stock)
     modelDecisionDf = pd.DataFrame(
@@ -76,6 +76,8 @@ def stock_market_simulation(model, initial_cash, days, stock, stock_name,day=Non
             day = day
         else:
             day = i
+       
+        
         if strategy == 'Buy' and cash >= stock_price:
             # Buy one share if cash is sufficient
             cash -= stock_price
@@ -94,16 +96,16 @@ def stock_market_simulation(model, initial_cash, days, stock, stock_name,day=Non
             shares_held -= 1
             print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
 
-        elif cash == 0:
-            injection = input(
-                f'Your current portfolio value is {portfolio_value[i-1]}. The stock price is {stock_price}. Enter the amount of cash you want to inject: ')
-            if injection:
-                cash += float(injection)
-                invested += float(injection)
-                print(f"Day {i}: Cash injected: {injection}, Cash: {cash}")
-                if cash < stock_price:
-                    break
-
+        # elif cash == 0:
+        #     injection = input(
+        #         f'Your current portfolio value is {portfolio_value[i-1]}. The stock price is {stock_price}. Enter the amount of cash you want to inject: ')
+        #     if injection:
+        #         cash += float(injection)
+        #         invested += float(injection)
+        #         print(f"Day {i}: Cash injected: {injection}, Cash: {cash}")
+        #         if cash < stock_price:
+        #             break
+        
         # Calculate the total portfolio value (cash + stock holdings)
         portfolio_value_at_time = cash + (shares_held * stock_price)
         portfolio_value.append(portfolio_value_at_time)
@@ -121,7 +123,8 @@ def stock_market_simulation(model, initial_cash, days, stock, stock_name,day=Non
         })
         modelDecisionDf = pd.concat(
             [modelDecisionDf, new_row], ignore_index=True)
-
+    if existing_shares > 0:
+        d = 1
     # Final results
     final_portfolio_value = cash + (shares_held * stock['Close'].iloc[-1])
     print(f'Total cash invested: {invested}')
@@ -416,7 +419,7 @@ def get_stock_data(symbol):
     stock_df = pd.read_csv('data/sp500_stocks.csv')
     stock_df = stock_df[stock_df['Symbol'] == symbol]
     stock = yf.Ticker(symbol)
-    data = stock.history(period='1d', interval='1d')
+    data = stock.history(period='5d', interval='1d')
 
     if not data.empty:
         latest_data = data.iloc[-1]
@@ -625,7 +628,7 @@ def simulate_day(stock_df):
     all_decisions_g.to_csv('data/general_model_decisions.csv', mode='a', header=False, index=False)
 
 
-def simulate_day_general(stock_df):
+def simulate_day_general():
     # Load the general model
     general_model = xgb.Booster()
     general_model.load_model('models/all_stocks_incremental_model.pkl') 
@@ -648,6 +651,7 @@ def simulate_day_general(stock_df):
 
         cash_g = last_row_g['Cash']
         day = last_row_g['Day'] + 1
+        existing_shares = last_row_g['Shares Held']
 
 
         # Get the stock data for the symbol
@@ -661,8 +665,8 @@ def simulate_day_general(stock_df):
             initial_cash=cash_g,
             days=1,  # Simulate only one day
             stock=updated_stock_df,
-            stock_name=symbol,
-            day = day
+            day=day,
+            existing_shares=existing_shares,
         )
 
         all_decisions_g = pd.concat([all_decisions_g, new_decisions_g], ignore_index=True)
@@ -670,7 +674,7 @@ def simulate_day_general(stock_df):
     all_decisions_g.to_csv('data/general_model_decisions.csv', mode='a', header=False, index=False)
 
 
-def simulate_day_specific(stock_df):
+def simulate_day_specific():
     
     # Load company data
     company_df = pd.read_csv('data/sp500_companies.csv')
@@ -693,10 +697,11 @@ def simulate_day_specific(stock_df):
         # Set the starting cash and shares for the current simulation
         cash_s = last_row_s['Cash']
         day = last_row_s['Day'] + 1
-
+        existing_shares = last_row_s['Shares Held']
+        
         # Get the stock data for the symbol
         updated_stock_df = get_stock_data(symbol)
-        updated_stock_df = updated_stock_df.tail(1)
+        updated_stock_df = updated_stock_df.tail(2)
 
         # Load the specific model for the stock, or fallback to the general model if it doesn't exist
         try:
@@ -712,13 +717,15 @@ def simulate_day_specific(stock_df):
         new_decisions_s, _ = stock_market_simulation(
             model=specific_model,
             initial_cash=cash_s,
-            days=1,  # Simulate only one day
+            days=2,  # Simulate only one day
             stock=updated_stock_df,
-            stock_name=symbol,
-            day=day
+            day=day,
+            existing_shares=existing_shares
         )
         # Append the new decisions to the all_decisions dataframes
         all_decisions_s = pd.concat([all_decisions_s, new_decisions_s], ignore_index=True)
+        if existing_shares == 1:
+            continue
 
     # Save the new decisions
     all_decisions_s.to_csv('data/specific_model_decisions.csv', mode='a', header=False, index=False)
@@ -727,11 +734,16 @@ if __name__ == '__main__':
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
     # Load your stock data (SP500 example)
-    stock_df = pd.read_csv('data/sp500_stocks.csv')
+
+    """
+    FIX STOCK_SIMULATION TO PICK UP FROM PREVIOUS DAY
+    CURRENTLY NOT GETTING PORTFOLIO VALUE CORRECT WHEN RUNNING ONE DAY 
+    AT A TIME. 
+    """
 
     # Simulate one day for all stocks, continuing from previous cash balances
     # simulate_day_general(stock_df)
-    simulate_day_specific(stock_df)
+    simulate_day_specific()
 
     # # Load the general decisions DataFrame
     # general_decisions = pd.read_csv('data/general_model_decisions.csv')
