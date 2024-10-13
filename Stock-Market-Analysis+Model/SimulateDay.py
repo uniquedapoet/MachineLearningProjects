@@ -17,6 +17,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.linear_model import Lasso, Ridge, ElasticNet
 import datetime
+from sklearn.model_selection import GridSearchCV
+      
 
 
 def predict_action(data: dict, model):
@@ -64,7 +66,7 @@ def predict_action(data: dict, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False):
+def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False,print_results=False):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
@@ -88,20 +90,30 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             # Buy one share if cash is sufficient
             cash -= stock_price
             shares_held += 1
-            print(
-                f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
+            if print_results:
+                print(
+                    f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Buy' and cash < stock_price:
             shares_held += cash / stock_price
             cash = 0
-            print(
-                f"Day {day}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
+            if print_results:
+                print(
+                    f"Day {day}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Sell' and shares_held > 0:
             # Sell one share if we hold any
             cash += stock_price
             shares_held -= 1
-            print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
+            if print_results:
+                print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
+
+        elif strategy == 'Sell' and shares_held > 1:
+            # Sell one share if we hold any
+            cash += (stock_price * 2)
+            shares_held -= 2
+            if print_results:
+                print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
 
         # elif cash == 0:
         #     injection = input(
@@ -134,10 +146,11 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
     #     d = 1
     # Final results
     final_portfolio_value = cash + (shares_held * stock['Close'].iloc[-1])
-    print(f'Total cash invested: {invested}')
-    print(f'Stock {stock["Symbol"].iloc[0]}')
-    print(f"Final Portfolio Value: {final_portfolio_value}")
-    print(f"Cash: {cash}, Shares held: {shares_held}")
+    if print_results:
+        print(f'Total cash invested: {invested}')
+        print(f'Stock {stock["Symbol"].iloc[0]}')
+        print(f"Final Portfolio Value: {final_portfolio_value}")
+        print(f"Cash: {cash}, Shares held: {shares_held}")
     return modelDecisionDf, cash
     # return portfolio_value, final_portfolio_value
 
@@ -393,6 +406,12 @@ def add_columns(stock_df):
     # Clean up: drop the temporary signals if needed
     stock_df.drop(['Buy_Signal', 'Sell_Signal',
                   'Smoothed_Close'], axis=1, inplace=True)
+    
+    stock_df['Action'] = stock_df.apply(determine_action, axis=1)
+    stock_df['Z-score'] = (stock_df['Close'] -
+                           stock_df['Close'].mean()) / stock_df['Close'].std()
+
+    stock_df = stock_df.fillna(0)
 
     stock_df['OBV'] = 0
     for i in range(1, len(stock_df)):
@@ -406,11 +425,7 @@ def add_columns(stock_df):
             stock_df.loc[stock_df.index[i],
                          'OBV'] = stock_df['OBV'].iloc[i - 1]
 
-    stock_df['Action'] = stock_df.apply(determine_action, axis=1)
-    stock_df['Z-score'] = (stock_df['Close'] -
-                           stock_df['Close'].mean()) / stock_df['Close'].std()
-
-    stock_df = stock_df.fillna(0)
+    
 
     return stock_df
 
@@ -846,15 +861,24 @@ if __name__ == '__main__':
 
     """
 
+    """
+    Try stacking models.
+    Try allowwing the model to sell all stocks at once.
+    See about allwoing model to by multiple stocks at once.
+    """
+    features = ['Volume', 'MA_10', 'MA_20', 'MA_50', 'MA_200', 'std_10',
+                'std_20', 'std_50', 'std_200', 'upper_band_10', 'lower_band_10',
+                'upper_band_20', 'lower_band_20', 'upper_band_50', 'lower_band_50',
+                'upper_band_200', 'lower_band_200', 'Golden_Cross_Short', 'Golden_Cross_Medium',
+                'Golden_Cross_Long', 'Death_Cross_Short', 'Death_Cross_Medium', 'Death_Cross_Long',
+                'ROC', 'AVG_Volume_10', 'AVG_Volume_20', 'AVG_Volume_50', 'AVG_Volume_200', 'Doji',
+                'Bullish_Engulfing', 'Bearish_Engulfing', 'MACD', 'Signal', 'MACD_Hist', 'TR', 'ATR',
+                'RSI_10_Day', '10_Day_ROC', 'Resistance_10_Day', 'Support_10_Day', 'Resistance_20_Day',
+                'Support_20_Day', 'Resistance_50_Day', 'Support_50_Day', 'Volume_MA_10', 'Volume_MA_20',
+                'Volume_MA_50', 'OBV', 'Z-score']
+
+
     # Simulate one day for all stocks, continuing from previous cash balances
     # simulate_day_general()
-    simulate_day_specific()
-    # stock_data = pd.read_csv('data/base_data.csv')
-    # stock_data = stock_data[stock_data['Symbol'] == 'AMD']
-    # Optimal_Action_model = joblib.load('OptimalActionModel.pkl')
-    # specific_model0 = joblib.load('models/AMD_model.pkl')
-    # general_model = xgb.Booster()
-    # general_model.load_model('models/all_stocks_incremental_model.pkl')
-    # specific_decisions, _ = stock_market_simulation(specific_model0, 10000, 365, stock_data)
-    # Optimal_Action_decision,_ = stock_market_simulation(Optimal_Action_model, 10000, 365, stock_data)
-    # general_model_decisions, _ = stock_market_simulation(general_model, 10000, 365, stock_data)
+    # simulate_day_specific()
+    
