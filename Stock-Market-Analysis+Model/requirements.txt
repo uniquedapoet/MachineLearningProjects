@@ -6,3 +6,13 @@ statsmodels
 tensorflow
 torch
 jupyter
+yfinance
+xgboost
+lightgbm
+catboost
+joblib
+seaborn
+altair
+mplfinance
+plotly
+scipy
