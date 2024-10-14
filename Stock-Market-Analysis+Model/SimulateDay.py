@@ -1,23 +1,15 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import joblib
-import seaborn as sns
-import altair as alt
-import mplfinance as mpf
-import plotly.graph_objects as go
 import yfinance as yf
-from scipy.stats import norm
 import os
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 import xgboost as xgb
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.linear_model import Lasso, Ridge, ElasticNet
 import datetime
-from sklearn.model_selection import GridSearchCV
+import warnings
+
+warnings.filterwarnings('ignore')
       
 
 
@@ -66,7 +58,7 @@ def predict_action(data: dict, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False,print_results=False):
+def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False, print_results=False):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
@@ -81,25 +73,22 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
     for i in range(days):
         stock_price = stock['Close'].iloc[i]
         strategy = predict_action(scaled.iloc[i].to_dict(), model)
-        if oneDay:
-            day = oneDay
-        else:
-            day = i
+        day = oneDay if oneDay else i
 
         if strategy == 'Buy' and cash >= stock_price:
             # Buy one share if cash is sufficient
             cash -= stock_price
             shares_held += 1
             if print_results:
-                print(
-                    f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
+                print(f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Buy' and cash < stock_price:
-            shares_held += cash / stock_price
+            # Buy fractional shares if cash is insufficient for a full share
+            fractional_shares = cash / stock_price
+            shares_held += fractional_shares
             cash = 0
             if print_results:
-                print(
-                    f"Day {day}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
+                print(f"Day {day}: Bought {fractional_shares} shares at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Sell' and shares_held > 0:
             # Sell one share if we hold any
@@ -108,22 +97,10 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             if print_results:
                 print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
 
-        elif strategy == 'Sell' and shares_held > 1:
-            # Sell one share if we hold any
-            cash += (stock_price * 2)
-            shares_held -= 2
+        elif strategy == 'Hold':
+            # No action taken, just holding the current position
             if print_results:
-                print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
-
-        # elif cash == 0:
-        #     injection = input(
-        #         f'Your current portfolio value is {portfolio_value[i-1]}. The stock price is {stock_price}. Enter the amount of cash you want to inject: ')
-        #     if injection:
-        #         cash += float(injection)
-        #         invested += float(injection)
-        #         print(f"Day {i}: Cash injected: {injection}, Cash: {cash}")
-        #         if cash < stock_price:
-        #             break
+                print(f"Day {day}: Holding, Cash: {cash}, Shares held: {shares_held}")
 
         # Calculate the total portfolio value (cash + stock holdings)
         portfolio_value_at_time = cash + (shares_held * stock_price)
@@ -137,13 +114,10 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             'Stock Price': [stock_price],
             'Cash': [cash],
             'Shares Held': [shares_held],
-            'Portfolio Value': [portfolio_value_at_time],
-            'Stock Price': [stock_price]
+            'Portfolio Value': [portfolio_value_at_time]
         })
-        modelDecisionDf = pd.concat(
-            [modelDecisionDf, new_row], ignore_index=True)
-    # if existing_shares > 0:
-    #     d = 1
+        modelDecisionDf = pd.concat([modelDecisionDf, new_row], ignore_index=True)
+
     # Final results
     final_portfolio_value = cash + (shares_held * stock['Close'].iloc[-1])
     if print_results:
@@ -151,7 +125,9 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
         print(f'Stock {stock["Symbol"].iloc[0]}')
         print(f"Final Portfolio Value: {final_portfolio_value}")
         print(f"Cash: {cash}, Shares held: {shares_held}")
+
     return modelDecisionDf, cash
+
     # return portfolio_value, final_portfolio_value
 
 
@@ -769,7 +745,7 @@ def simulate_day_general():
             [all_decisions_g, new_decisions_g], ignore_index=True)
 
     all_decisions_g.to_csv('data/general_model_decisions.csv',
-                           mode='a', header=False, index=False)
+                           mode='a', header=False, index=False).sort_values(by='Day').sort_values(by='Stock Name')
 
 
 def simulate_day_specific():
@@ -843,7 +819,7 @@ def simulate_day_specific():
 
     # Save the new decisions
     all_decisions_s.to_csv('data/specific_model_decisions.csv',
-                           mode='a', header=False, index=False)
+                           mode='a', header=False, index=False).sort_values(by='Day').sort_values(by='Stock Name')
 
 
 if __name__ == '__main__':
