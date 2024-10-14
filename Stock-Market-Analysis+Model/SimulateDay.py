@@ -707,7 +707,7 @@ def simulate_day_general():
     # Load company data
     company_df = pd.read_csv('data/sp500_companies.csv')
 
-    general_decision_df = pd.read_csv('data/general_model_decisions.csv')
+    general_decision_df = pd.read_csv('simResults/general_model_decisions.csv')
 
     all_decisions_g = pd.DataFrame(columns=[
         'Stock Name', 'Day', 'Action', 'Stock Price', 'Cash', 'Shares Held', 'Portfolio Value'])
@@ -744,7 +744,7 @@ def simulate_day_general():
         all_decisions_g = pd.concat(
             [all_decisions_g, new_decisions_g], ignore_index=True)
 
-    all_decisions_g.to_csv('data/general_model_decisions.csv',
+    all_decisions_g.to_csv('simResults/general_model_decisions.csv',
                            mode='a', header=False, index=False).sort_values(by='Day').sort_values(by='Stock Name')
 
 
@@ -758,7 +758,7 @@ def simulate_day_specific():
     stock_data = pd.read_csv('data/base_data.csv')
 
     # Load the previous decision dataframes
-    specific_decision_df = pd.read_csv('data/specific_model_decisions.csv')
+    specific_decision_df = pd.read_csv('simResults/specific_model_decisions.csv')
 
     # Initialize empty dataframes for storing new decisions
     all_decisions_s = pd.DataFrame(columns=[
@@ -818,7 +818,7 @@ def simulate_day_specific():
             continue
 
     # Save the new decisions
-    all_decisions_s.to_csv('data/specific_model_decisions.csv',
+    all_decisions_s.to_csv('simResults/specific_model_decisions.csv',
                            mode='a', header=False, index=False).sort_values(by='Day').sort_values(by='Stock Name')
 
 
