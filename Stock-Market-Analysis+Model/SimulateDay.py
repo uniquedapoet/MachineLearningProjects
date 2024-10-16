@@ -10,7 +10,6 @@ import datetime
 import warnings
 
 warnings.filterwarnings('ignore')
-      
 
 
 def predict_action(data: dict, model):
@@ -58,7 +57,14 @@ def predict_action(data: dict, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False, print_results=False):
+def stock_market_simulation(model,
+                            initial_cash: int,
+                            days: int, 
+                            stock: pd.DataFrame,
+                            existing_shares=0,
+                            oneDay=False,
+                            print_results=False,
+                            masstrades=False):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
@@ -66,7 +72,8 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
     portfolio_value = []
     scaled = scale_data(stock)
     modelDecisionDf = pd.DataFrame(
-        columns=['Stock Name', 'Day', 'Action', 'Cash', 'Shares Held', 'Portfolio Value', 'Stock Price'])
+        columns=['Stock Name', 'Day', 'Action', 'Cash',
+        'Shares Held', 'Portfolio Value', 'Stock Price'])
 
     days = min(days, len(stock))
 
@@ -76,9 +83,14 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
         day = oneDay if oneDay else i
 
         if strategy == 'Buy' and cash >= stock_price:
-            # Buy one share if cash is sufficient
-            cash -= stock_price
-            shares_held += 1
+            if (modelDecisionDf['Action'].tail(5) == 'Buy').all() and cash >= stock_price * 5 and masstrades:
+                # Buy all remaining shares
+                cash -= (stock_price * 5) #* 0.99  # Apply a 1% fee, if applicable
+                shares_held += 5
+            else:
+                # Buy one share if cash is sufficient
+                cash -= stock_price
+                shares_held += 1
             if print_results:
                 print(f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
 
@@ -91,11 +103,16 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
                 print(f"Day {day}: Bought {fractional_shares} shares at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Sell' and shares_held > 0:
-            # Sell one share if we hold any
-            cash += stock_price
-            shares_held -= 1
+            if (modelDecisionDf['Action'].tail(5) == 'Sell').all() and shares_held >= 5 and masstrades:
+                # Sell all remaining shares
+                cash += (stock_price * 5) #* 0.99  # Apply a 1% fee, if applicable
+                shares_held -= 5
+            else:
+                # Sell one share if not all the past 5 actions were 'Sell'
+                cash += stock_price
+                shares_held -= 1
             if print_results:
-                print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
+                print(f"Day {day}: Sold shares at {stock_price}, Cash: {cash}")
 
         elif strategy == 'Hold':
             # No action taken, just holding the current position
@@ -116,7 +133,8 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             'Shares Held': [shares_held],
             'Portfolio Value': [portfolio_value_at_time]
         })
-        modelDecisionDf = pd.concat([modelDecisionDf, new_row], ignore_index=True)
+        modelDecisionDf = pd.concat(
+            [modelDecisionDf, new_row], ignore_index=True)
 
     # Final results
     final_portfolio_value = cash + (shares_held * stock['Close'].iloc[-1])
@@ -382,7 +400,7 @@ def add_columns(stock_df):
     # Clean up: drop the temporary signals if needed
     stock_df.drop(['Buy_Signal', 'Sell_Signal',
                   'Smoothed_Close'], axis=1, inplace=True)
-    
+
     stock_df['Action'] = stock_df.apply(determine_action, axis=1)
     stock_df['Z-score'] = (stock_df['Close'] -
                            stock_df['Close'].mean()) / stock_df['Close'].std()
@@ -400,8 +418,6 @@ def add_columns(stock_df):
         else:
             stock_df.loc[stock_df.index[i],
                          'OBV'] = stock_df['OBV'].iloc[i - 1]
-
-    
 
     return stock_df
 
@@ -424,10 +440,60 @@ def scale_data(stock_df):
                 'RSI_10_Day', '10_Day_ROC', 'Resistance_10_Day', 'Support_10_Day', 'Resistance_20_Day',
                 'Support_20_Day', 'Resistance_50_Day', 'Support_50_Day', 'Volume_MA_10', 'Volume_MA_20',
                 'Volume_MA_50', 'OBV', 'Z-score']
+
     min_max_scaler = MinMaxScaler()
+
     stock_df = add_columns(stock_df)
+    stock_df.replace([float('inf'), float('-inf')], float('nan'), inplace=True)
+    
+    # Drop rows with NaN values
+    stock_df.dropna(subset=features, inplace=True)
     stock_df[features] = min_max_scaler.fit_transform(stock_df[features])
     return stock_df[features]
+
+
+def scale_and_obtain_data(symbol, test_size=0.2):
+    """
+    Scales the data using MinMaxScaler for Model Training.
+    Columns Added Within this function. 
+
+    Parameters:
+    symbol (str): Stock symbol to train the model for
+    test_size (float): Size of the test set
+
+    Returns:
+    X_train (DataFrame): Training data
+    y_train (DataFrame): Training labels
+    X_test (DataFrame): Testing data
+    y_test (DataFrame): Testing labels
+    """
+    features = ['Volume', 'MA_10', 'MA_20', 'MA_50', 'MA_200', 'std_10',
+                'std_20', 'std_50', 'std_200', 'upper_band_10', 'lower_band_10',
+                'upper_band_20', 'lower_band_20', 'upper_band_50', 'lower_band_50',
+                'upper_band_200', 'lower_band_200', 'Golden_Cross_Short', 'Golden_Cross_Medium',
+                'Golden_Cross_Long', 'Death_Cross_Short', 'Death_Cross_Medium', 'Death_Cross_Long',
+                'ROC', 'AVG_Volume_10', 'AVG_Volume_20', 'AVG_Volume_50', 'AVG_Volume_200', 'Doji',
+                'Bullish_Engulfing', 'Bearish_Engulfing', 'MACD', 'Signal', 'MACD_Hist', 'TR', 'ATR',
+                'RSI_10_Day', '10_Day_ROC', 'Resistance_10_Day', 'Support_10_Day', 'Resistance_20_Day',
+                'Support_20_Day', 'Resistance_50_Day', 'Support_50_Day', 'Volume_MA_10', 'Volume_MA_20',
+                'Volume_MA_50', 'OBV', 'Z-score']
+
+    stock_df = get_stock_data(symbol)
+    
+    print(f'Adding columns...')
+    min_max_scaler = MinMaxScaler()
+    stock_df = add_columns(stock_df)
+    stock_df.replace([float('inf'), float('-inf')], float('nan'), inplace=True)
+    
+    # Drop rows with NaN values
+    stock_df.dropna(subset=features, inplace=True)
+    stock_df[features] = min_max_scaler.fit_transform(stock_df[features])
+    X = stock_df[features]
+    y = stock_df['Action']
+    print(f'Splitting data...')
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42)
+    return X_train, X_test, y_train, y_test
 
 
 def _select_stock():
@@ -436,12 +502,47 @@ def _select_stock():
     return stock_df[stock_df['Symbol'] == company_name]
 
 
+def fixFuckUp(symbol):
+    stock_df = pd.read_csv('data/sp500_stocks.csv')
+    stock_df = stock_df[stock_df['Symbol'] == symbol]
+    try:
+        stock = yf.Ticker(symbol)
+        data = stock.history(period='5d', interval='1d')
+    except:
+        stock = yf.Ticker(symbol)
+
+        data = stock.history(period='1d', interval='1d')
+
+    if not data.empty:
+        latest_data = data.tail(2).iloc[0]
+        time = latest_data.name
+        open_price = latest_data['Open']
+        high = latest_data['High']
+        low = latest_data['Low']
+        close = latest_data['Close']
+        volume = latest_data['Volume']
+        new_row = pd.DataFrame({
+            'Symbol': [symbol],
+            'Date': [datetime.datetime.strftime(time, '%Y-%m-%d')],
+            'Open': [open_price],
+            'High': [high],
+            'Low': [low],
+            'Close': [close],
+            'Volume': [volume]
+        })
+
+        new_row = new_row.reset_index(drop=True)
+
+        stock_df = pd.concat([stock_df, new_row], ignore_index=True).fillna(0)
+        return stock_df
+    
+
 def get_stock_data(symbol):
     stock_df = pd.read_csv('data/sp500_stocks.csv')
     stock_df = stock_df[stock_df['Symbol'] == symbol]
     try:
         stock = yf.Ticker(symbol)
-        data = stock.history(period='1d', interval='1d')
+        data = stock.history(period='5d', interval='1d')
     except:
         stock = yf.Ticker(symbol)
 
@@ -611,23 +712,40 @@ def train_model_incrementally():
     print("Model trained on all stocks and saved.")
 
 
-def simulate_days(days,cash=10000,existing_shares=0):
+def simulate_days(days, cash=10000, existing_shares=0,to_file=False,massTrade=False):
     """
     Simulates a day of trading for all stocks using the specific model.
     Models used: {symbol}_model.pkl XGBClassifier
     """
-    # Load company data
-    company_df = pd.read_csv('data/sp500_companies.csv')
-
-    # Load the previous decision dataframes
-    specific_decision_df = pd.read_csv('simResults/sim_results.csv')
-
     # Initialize empty dataframes for storing new decisions
     all_decisions_s = pd.DataFrame(columns=[
         'Stock Name', 'Day', 'Action', 'Stock Price', 'Cash', 'Shares Held', 'Portfolio Value'])
 
     # Loop through each stock symbol
-    for symbol in ['AAPL', 'MSFT', 'AMD', 'TSLA', 'AMZN', 'GOOGL', 'FB', 'NFLX', 'NVDA', 'INTC']:
+    for symbol in ['AAPL',
+                    'MSFT', 
+                    'AMD', 
+                    'TSLA', 
+                    'AMZN', 
+                    'GOOGL', 
+                    'NFLX',
+                    'NVDA', 
+                    'INTC',   
+                    "OXY",    # Occidental Petroleum
+                    "SBAC",   # SBA Communications
+                    "HST",    # Host Hotels & Resorts
+                    "MOH",    # Molina Healthcare
+                    "VRSN",   # Verisign
+                    "ANSS",   # ANSYS
+                    "QRVO",   # Qorvo
+                    "PLD",    # Prologis
+                    "AES",    # AES Corporation
+                    "EW"    # Edwards Lifesciences
+                    'CSX',    # CSX Corporation
+                    'WMT',   # Walmart
+                    'PEP',  # PepsiCo
+                    'UNH',  # UnitedHealth Group
+                   ]:
         try:
             # Get the most recent stock_data
             updated_stock_df = get_stock_data(symbol)
@@ -637,7 +755,7 @@ def simulate_days(days,cash=10000,existing_shares=0):
 
             # Load the specific model for the stock, or fallback to the general model if it doesn't exist
             try:
-                specific_model = joblib.load(f'models/{symbol}_model.pkl')
+                specific_model = joblib.load(f'LGBMmodels/{symbol}_model.pkl')
                 print(f"Using model for {symbol}")
             except Exception:
                 general_model = xgb.Booster()
@@ -653,7 +771,8 @@ def simulate_days(days,cash=10000,existing_shares=0):
                 days=days,  # Simulate only one day
                 stock=updated_stock_df,
                 oneDay=False,
-                existing_shares=existing_shares
+                existing_shares=existing_shares,
+                masstrades=massTrade
             )
             # Append the new decisions to the all_decisions dataframes
             all_decisions_s = pd.concat(
@@ -666,11 +785,11 @@ def simulate_days(days,cash=10000,existing_shares=0):
             print(f"Error for {symbol}. Skipping...")
             print("====================================")
             continue
-
-    # Save the new decisions
-    all_decisions_s.to_csv('simResults/sim_results.csv', header=False, 
+    
+    if to_file:
+        all_decisions_s.to_csv('simResults/sim_results.csv',
                            index=False)
-
+    return all_decisions_s
 
 def simulate_day_general(day):
     """
@@ -694,24 +813,26 @@ def simulate_day_general(day):
             # Get the most recent cash and shares held for the general model
             if symbol in general_decision_df['Stock Name'].unique():
                 last_row_g = general_decision_df[general_decision_df['Stock Name']
-                                                == symbol].iloc[-1]
+                                                 == symbol].iloc[-1]
             else:
                 last_row_g = {'Cash': 10000, 'Shares Held': 0,
-                            'Day': 0}  # Initialize if no previous data
+                              'Day': 0}  # Initialize if no previous data
 
             cash_g = last_row_g['Cash']
             existing_shares = last_row_g['Shares Held']
 
             # Get the stock data for the symbol
+            # messupday = fixFuckUp(symbol).tail(1)
             updated_stock_df = get_stock_data(symbol)
-            updated_stock_df = updated_stock_df.tail(4)
+            # updated_stock_df = pd.concat([messupday, updated_stock_df]).sort_values(by='Date')
+            updated_stock_df = updated_stock_df.tail(1)
 
             print(f"Using general model for {symbol}")
 
             new_decisions_g, _ = stock_market_simulation(
                 model=general_model,
                 initial_cash=cash_g,
-                days=4,  # Simulate only one day
+                days=1,  # Simulate only one day
                 stock=updated_stock_df,
                 oneDay=False,
                 existing_shares=existing_shares,
@@ -728,6 +849,7 @@ def simulate_day_general(day):
     all_decisions_g.to_csv('simResults/general_model_decisions.csv',
                            mode='a', header=False, index=False)
 
+
 def simulate_day_specific(day):
     """
     Simulates a day of trading for all stocks using the specific model.
@@ -735,10 +857,10 @@ def simulate_day_specific(day):
     """
     # Load company data
     company_df = pd.read_csv('data/sp500_companies.csv')
-    stock_data = pd.read_csv('data/base_data.csv')
 
     # Load the previous decision dataframes
-    specific_decision_df = pd.read_csv('simResults/specific_model_decisions.csv')
+    specific_decision_df = pd.read_csv(
+        'simResults/specific_model_decisions.csv')
 
     # Initialize empty dataframes for storing new decisions
     all_decisions_s = pd.DataFrame(columns=[
@@ -760,7 +882,7 @@ def simulate_day_specific(day):
             existing_shares = last_row_s['Shares Held']
 
             updated_stock_df = get_stock_data(symbol)
-            updated_stock_df = updated_stock_df.tail(4)
+            updated_stock_df = updated_stock_df.tail(1)
 
             # updated_stock_df = stock_data[stock_data['Symbol'] == symbol].tail(1)
 
@@ -779,9 +901,9 @@ def simulate_day_specific(day):
             new_decisions_s, _ = stock_market_simulation(
                 model=specific_model,
                 initial_cash=cash_s,
-                days=4,  # Simulate only one day
+                days=1,  # Simulate only one day
                 stock=updated_stock_df,
-                oneDay=False,
+                oneDay=day,
                 existing_shares=existing_shares
             )
             # Append the new decisions to the all_decisions dataframes
@@ -832,9 +954,8 @@ if __name__ == '__main__':
                 'Support_20_Day', 'Resistance_50_Day', 'Support_50_Day', 'Volume_MA_10', 'Volume_MA_20',
                 'Volume_MA_50', 'OBV', 'Z-score']
 
-
     # Simulate one day for all stocks, continuing from previous cash balances
-    # simulate_day_general(4)
-    # simulate_day_specific(4)
-    simulate_days(365)
-    
+    simulate_day_specific(5)
+    simulate_day_general(5)
+    # simulate_days(365,to_file=True,massTrade=True)
+
