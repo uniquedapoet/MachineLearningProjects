@@ -1,23 +1,15 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import joblib
-import seaborn as sns
-import altair as alt
-import mplfinance as mpf
-import plotly.graph_objects as go
 import yfinance as yf
-from scipy.stats import norm
 import os
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 import xgboost as xgb
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.linear_model import Lasso, Ridge, ElasticNet
 import datetime
-from sklearn.model_selection import GridSearchCV
+import warnings
+
+warnings.filterwarnings('ignore')
       
 
 
@@ -66,7 +58,7 @@ def predict_action(data: dict, model):
         return 'Hold'
 
 
-def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False,print_results=False):
+def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0, oneDay=False, print_results=False):
     # Add Taxes and Fees
     cash = initial_cash
     invested = cash
@@ -81,25 +73,22 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
     for i in range(days):
         stock_price = stock['Close'].iloc[i]
         strategy = predict_action(scaled.iloc[i].to_dict(), model)
-        if oneDay:
-            day = oneDay
-        else:
-            day = i
+        day = oneDay if oneDay else i
 
         if strategy == 'Buy' and cash >= stock_price:
             # Buy one share if cash is sufficient
             cash -= stock_price
             shares_held += 1
             if print_results:
-                print(
-                    f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
+                print(f"Day {day}: Bought 1 share at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Buy' and cash < stock_price:
-            shares_held += cash / stock_price
+            # Buy fractional shares if cash is insufficient for a full share
+            fractional_shares = cash / stock_price
+            shares_held += fractional_shares
             cash = 0
             if print_results:
-                print(
-                    f"Day {day}: Bought {cash / stock_price} shares at {stock_price}, Cash left: {cash}")
+                print(f"Day {day}: Bought {fractional_shares} shares at {stock_price}, Cash left: {cash}")
 
         elif strategy == 'Sell' and shares_held > 0:
             # Sell one share if we hold any
@@ -108,22 +97,10 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             if print_results:
                 print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
 
-        elif strategy == 'Sell' and shares_held > 1:
-            # Sell one share if we hold any
-            cash += (stock_price * 2)
-            shares_held -= 2
+        elif strategy == 'Hold':
+            # No action taken, just holding the current position
             if print_results:
-                print(f"Day {day}: Sold 1 share at {stock_price}, Cash: {cash}")
-
-        # elif cash == 0:
-        #     injection = input(
-        #         f'Your current portfolio value is {portfolio_value[i-1]}. The stock price is {stock_price}. Enter the amount of cash you want to inject: ')
-        #     if injection:
-        #         cash += float(injection)
-        #         invested += float(injection)
-        #         print(f"Day {i}: Cash injected: {injection}, Cash: {cash}")
-        #         if cash < stock_price:
-        #             break
+                print(f"Day {day}: Holding, Cash: {cash}, Shares held: {shares_held}")
 
         # Calculate the total portfolio value (cash + stock holdings)
         portfolio_value_at_time = cash + (shares_held * stock_price)
@@ -137,13 +114,10 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
             'Stock Price': [stock_price],
             'Cash': [cash],
             'Shares Held': [shares_held],
-            'Portfolio Value': [portfolio_value_at_time],
-            'Stock Price': [stock_price]
+            'Portfolio Value': [portfolio_value_at_time]
         })
-        modelDecisionDf = pd.concat(
-            [modelDecisionDf, new_row], ignore_index=True)
-    # if existing_shares > 0:
-    #     d = 1
+        modelDecisionDf = pd.concat([modelDecisionDf, new_row], ignore_index=True)
+
     # Final results
     final_portfolio_value = cash + (shares_held * stock['Close'].iloc[-1])
     if print_results:
@@ -151,7 +125,9 @@ def stock_market_simulation(model, initial_cash, days, stock, existing_shares=0,
         print(f'Stock {stock["Symbol"].iloc[0]}')
         print(f"Final Portfolio Value: {final_portfolio_value}")
         print(f"Cash: {cash}, Shares held: {shares_held}")
+
     return modelDecisionDf, cash
+
     # return portfolio_value, final_portfolio_value
 
 
@@ -635,91 +611,68 @@ def train_model_incrementally():
     print("Model trained on all stocks and saved.")
 
 
-def simulate_day(stock_df):
-    # # Load the general model
-    general_model = xgb.Booster()
-    general_model.load_model('models/all_stocks_incremental_model.pkl')
-
+def simulate_days(days,cash=10000,existing_shares=0):
+    """
+    Simulates a day of trading for all stocks using the specific model.
+    Models used: {symbol}_model.pkl XGBClassifier
+    """
     # Load company data
     company_df = pd.read_csv('data/sp500_companies.csv')
 
     # Load the previous decision dataframes
-    specific_decision_df = pd.read_csv('data/specific_model_decisions.csv')
-    general_decision_df = pd.read_csv('data/general_model_decisions.csv')
+    specific_decision_df = pd.read_csv('simResults/sim_results.csv')
 
     # Initialize empty dataframes for storing new decisions
     all_decisions_s = pd.DataFrame(columns=[
         'Stock Name', 'Day', 'Action', 'Stock Price', 'Cash', 'Shares Held', 'Portfolio Value'])
 
-    all_decisions_g = pd.DataFrame(columns=[
-        'Stock Name', 'Day', 'Action', 'Stock Price', 'Cash', 'Shares Held', 'Portfolio Value'])
-
     # Loop through each stock symbol
-    for symbol in company_df['Symbol'].unique():
-        # Get the most recent cash and shares held for the specific model
-        if symbol in specific_decision_df['Stock Name'].unique():
-            last_row_s = specific_decision_df[specific_decision_df['Stock Name']
-                                              == symbol].iloc[-1]
-        else:
-            # Initialize if no previous data
-            last_row_s = {'Cash': 10000, 'Shares Held': 0}
-
-        # # Get the most recent cash and shares held for the general model
-        if symbol in general_decision_df['Stock Name'].unique():
-            last_row_g = general_decision_df[general_decision_df['Stock Name']
-                                             == symbol].iloc[-1]
-        else:
-            # Initialize if no previous data
-            last_row_g = {'Cash': 10000, 'Shares Held': 0}
-
-        # Set the starting cash and shares for the current simulation
-        cash_s = last_row_s['Cash']
-        cash_g = last_row_g['Cash']
-
-        # Get the stock data for the symbol
-        updated_stock_df = get_stock_data(symbol)
-        updated_stock_df = updated_stock_df.tail(1)
-
-        # Load the specific model for the stock, or fallback to the general model if it doesn't exist
+    for symbol in ['AAPL', 'MSFT', 'AMD', 'TSLA', 'AMZN', 'GOOGL', 'FB', 'NFLX', 'NVDA', 'INTC']:
         try:
-            specific_model = joblib.load(f'models/{symbol}_model.pkl')
-            print(f"Using model for {symbol}")
-        except:
-            specific_model = general_model
-            print(f"Using general model for {symbol}")
+            # Get the most recent stock_data
+            updated_stock_df = get_stock_data(symbol)
+            updated_stock_df = updated_stock_df.tail(days)
 
-        # Simulate a day of trading for the stock with the specific model
-        new_decisions_s, _ = stock_market_simulation(
-            model=specific_model,
-            initial_cash=cash_s,
-            days=1,  # Simulate only one day
-            stock=updated_stock_df,
-            stock_name=symbol
-        )
-        print('Specific Model has been simulated. Now simulating General Model...')
-        # Simulate a day of trading for the stock with the general model
-        new_decisions_g, _ = stock_market_simulation(
-            model=general_model,
-            initial_cash=cash_g,
-            days=1,  # Simulate only one day
-            stock=updated_stock_df,
-            stock_name=symbol
-        )
+            # updated_stock_df = stock_data[stock_data['Symbol'] == symbol].tail(1)
 
-        # Append the new decisions to the all_decisions dataframes
-        all_decisions_s = pd.concat(
-            [all_decisions_s, new_decisions_s], ignore_index=True)
-        all_decisions_g = pd.concat(
-            [all_decisions_g, new_decisions_g], ignore_index=True)
+            # Load the specific model for the stock, or fallback to the general model if it doesn't exist
+            try:
+                specific_model = joblib.load(f'models/{symbol}_model.pkl')
+                print(f"Using model for {symbol}")
+            except Exception:
+                general_model = xgb.Booster()
+                general_model.load_model(
+                    'models/all_stocks_incremental_model.pkl')
+                specific_model = general_model
+                print(f"Using general model for {symbol}")
+
+            # Simulate a day of trading for the stock with the specific model
+            new_decisions_s, _ = stock_market_simulation(
+                model=specific_model,
+                initial_cash=cash,
+                days=days,  # Simulate only one day
+                stock=updated_stock_df,
+                oneDay=False,
+                existing_shares=existing_shares
+            )
+            # Append the new decisions to the all_decisions dataframes
+            all_decisions_s = pd.concat(
+                [all_decisions_s, new_decisions_s], ignore_index=True)
+            # if existing_shares == 1:
+            #     continue
+        except Exception as e:
+            print(f"Error: {e}")
+            print("====================================")
+            print(f"Error for {symbol}. Skipping...")
+            print("====================================")
+            continue
 
     # Save the new decisions
-    all_decisions_s.to_csv('data/specific_model_decisions.csv',
-                           mode='a', header=False, index=False)
-    all_decisions_g.to_csv('data/general_model_decisions.csv',
-                           mode='a', header=False, index=False)
+    all_decisions_s.to_csv('simResults/sim_results.csv', header=False, 
+                           index=False)
 
 
-def simulate_day_general():
+def simulate_day_general(day):
     """
     Simulates a day of trading for all stocks using the general model.
     Models used: all_stocks_incremental_model.pkl XGBClassifier
@@ -731,48 +684,51 @@ def simulate_day_general():
     # Load company data
     company_df = pd.read_csv('data/sp500_companies.csv')
 
-    general_decision_df = pd.read_csv('data/general_model_decisions.csv')
+    general_decision_df = pd.read_csv('simResults/general_model_decisions.csv')
 
     all_decisions_g = pd.DataFrame(columns=[
         'Stock Name', 'Day', 'Action', 'Stock Price', 'Cash', 'Shares Held', 'Portfolio Value'])
 
     for symbol in company_df['Symbol'].unique():
+        try:
+            # Get the most recent cash and shares held for the general model
+            if symbol in general_decision_df['Stock Name'].unique():
+                last_row_g = general_decision_df[general_decision_df['Stock Name']
+                                                == symbol].iloc[-1]
+            else:
+                last_row_g = {'Cash': 10000, 'Shares Held': 0,
+                            'Day': 0}  # Initialize if no previous data
 
-        # Get the most recent cash and shares held for the general model
-        if symbol in general_decision_df['Stock Name'].unique():
-            last_row_g = general_decision_df[general_decision_df['Stock Name']
-                                             == symbol].iloc[-1]
-        else:
-            last_row_g = {'Cash': 10000, 'Shares Held': 0,
-                          'Day': 0}  # Initialize if no previous data
+            cash_g = last_row_g['Cash']
+            existing_shares = last_row_g['Shares Held']
 
-        cash_g = last_row_g['Cash']
-        day = last_row_g['Day'] + 1
-        existing_shares = last_row_g['Shares Held']
+            # Get the stock data for the symbol
+            updated_stock_df = get_stock_data(symbol)
+            updated_stock_df = updated_stock_df.tail(4)
 
-        # Get the stock data for the symbol
-        updated_stock_df = get_stock_data(symbol)
-        updated_stock_df = updated_stock_df.tail(1)
+            print(f"Using general model for {symbol}")
 
-        print(f"Using general model for {symbol}")
+            new_decisions_g, _ = stock_market_simulation(
+                model=general_model,
+                initial_cash=cash_g,
+                days=4,  # Simulate only one day
+                stock=updated_stock_df,
+                oneDay=False,
+                existing_shares=existing_shares,
+            )
 
-        new_decisions_g, _ = stock_market_simulation(
-            model=general_model,
-            initial_cash=cash_g,
-            days=1,  # Simulate only one day
-            stock=updated_stock_df,
-            oneDay=day,
-            existing_shares=existing_shares,
-        )
-
-        all_decisions_g = pd.concat(
-            [all_decisions_g, new_decisions_g], ignore_index=True)
-
-    all_decisions_g.to_csv('data/general_model_decisions.csv',
+            all_decisions_g = pd.concat(
+                [all_decisions_g, new_decisions_g], ignore_index=True)
+        except Exception as e:
+            print(f"Error: {e}")
+            print("====================================")
+            print(f"Error for {symbol}. Skipping...")
+            print("====================================")
+            continue
+    all_decisions_g.to_csv('simResults/general_model_decisions.csv',
                            mode='a', header=False, index=False)
 
-
-def simulate_day_specific():
+def simulate_day_specific(day):
     """
     Simulates a day of trading for all stocks using the specific model.
     Models used: {symbol}_model.pkl XGBClassifier
@@ -782,7 +738,7 @@ def simulate_day_specific():
     stock_data = pd.read_csv('data/base_data.csv')
 
     # Load the previous decision dataframes
-    specific_decision_df = pd.read_csv('data/specific_model_decisions.csv')
+    specific_decision_df = pd.read_csv('simResults/specific_model_decisions.csv')
 
     # Initialize empty dataframes for storing new decisions
     all_decisions_s = pd.DataFrame(columns=[
@@ -794,18 +750,17 @@ def simulate_day_specific():
             # Get the most recent cash and shares held for the specific model
             if symbol in specific_decision_df['Stock Name'].unique():
                 last_row_s = specific_decision_df[specific_decision_df['Stock Name']
-                                                  == symbol].iloc[-1]
+                                                  == symbol].iloc[0]
             else:
                 last_row_s = {'Cash': 10000, 'Shares Held': 0,
                               'Day': 0}  # Initialize if no previous data
 
             # Set the starting cash and shares for the current simulation
             cash_s = last_row_s['Cash']
-            day = last_row_s['Day'] + 1
             existing_shares = last_row_s['Shares Held']
 
             updated_stock_df = get_stock_data(symbol)
-            updated_stock_df = updated_stock_df.tail(1)
+            updated_stock_df = updated_stock_df.tail(4)
 
             # updated_stock_df = stock_data[stock_data['Symbol'] == symbol].tail(1)
 
@@ -824,9 +779,9 @@ def simulate_day_specific():
             new_decisions_s, _ = stock_market_simulation(
                 model=specific_model,
                 initial_cash=cash_s,
-                days=1,  # Simulate only one day
+                days=4,  # Simulate only one day
                 stock=updated_stock_df,
-                oneDay=day,
+                oneDay=False,
                 existing_shares=existing_shares
             )
             # Append the new decisions to the all_decisions dataframes
@@ -842,7 +797,7 @@ def simulate_day_specific():
             continue
 
     # Save the new decisions
-    all_decisions_s.to_csv('data/specific_model_decisions.csv',
+    all_decisions_s.to_csv('simResults/specific_model_decisions.csv',
                            mode='a', header=False, index=False)
 
 
@@ -879,6 +834,7 @@ if __name__ == '__main__':
 
 
     # Simulate one day for all stocks, continuing from previous cash balances
-    # simulate_day_general()
-    # simulate_day_specific()
+    # simulate_day_general(4)
+    # simulate_day_specific(4)
+    simulate_days(365)
     
